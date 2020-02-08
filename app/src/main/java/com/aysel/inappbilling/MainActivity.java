@@ -1,31 +1,34 @@
 package com.aysel.inappbilling;
 
-import android.support.annotation.Nullable;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
-import android.widget.Toast;
 
 import com.android.billingclient.api.BillingClient;
 import com.android.billingclient.api.BillingClientStateListener;
 import com.android.billingclient.api.BillingFlowParams;
-import com.android.billingclient.api.ConsumeResponseListener;
+import com.android.billingclient.api.BillingResult;
 import com.android.billingclient.api.Purchase;
 import com.android.billingclient.api.PurchasesUpdatedListener;
+import com.android.billingclient.api.SkuDetails;
+import com.android.billingclient.api.SkuDetailsParams;
+import com.android.billingclient.api.SkuDetailsResponseListener;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import butterknife.BindView;
 import butterknife.ButterKnife;
 import butterknife.OnClick;
 
+import static android.support.constraint.Constraints.TAG;
+import static com.android.billingclient.api.BillingClient.BillingResponseCode.OK;
+
 public class MainActivity extends AppCompatActivity implements PurchasesUpdatedListener {
 
     private BillingClient mBillingClient;
-
-    @BindView(R.id.btn_birHaftalik)
-    Button mBirHaftalik;
 
     @BindView(R.id.btn_haftalikAbonelik)
     Button mBirHaftalikAbonelik;
@@ -37,33 +40,7 @@ public class MainActivity extends AppCompatActivity implements PurchasesUpdatedL
 
         ButterKnife.bind(this);
 
-        mBillingClient = BillingClient.newBuilder(this).setListener(this).build();
-        mBillingClient.startConnection(new BillingClientStateListener() {
-            @Override
-            public void onBillingSetupFinished(@BillingClient.BillingResponse int billingResponseCode) {
-                if (billingResponseCode == BillingClient.BillingResponse.OK)
-                    buttonIsEnableStatus(true);
-                else
-                    buttonIsEnableStatus(false);
-            }
-
-            @Override
-            public void onBillingServiceDisconnected() {
-                //TODO Kullanıcıya uyarı ver
-                buttonIsEnableStatus(false);
-                Toast.makeText(getApplicationContext(), "Ödeme gerçekleştirilemedi, Hata", Toast.LENGTH_SHORT).show();
-            }
-        });
-    }
-
-    private void buttonIsEnableStatus(boolean isEnabled) {
-        mBirHaftalik.setEnabled(isEnabled);
-        mBirHaftalikAbonelik.setEnabled(isEnabled);
-    }
-
-    @OnClick(R.id.btn_birHaftalik)
-    void f_birHaftalik(View view) {
-        buyProduct("1_haftalik_yenilemesiz");
+        mBillingClient = BillingClient.newBuilder(this).enablePendingPurchases().setListener(this).build();
     }
 
     @OnClick(R.id.btn_haftalikAbonelik)
@@ -71,37 +48,55 @@ public class MainActivity extends AppCompatActivity implements PurchasesUpdatedL
         buySubscription("1_haftalik_abonelik");
     }
 
-    private void buyProduct(String productID) {
-        BillingFlowParams flowParams = BillingFlowParams.newBuilder()
-                .setSku(productID)
-                .setType(BillingClient.SkuType.INAPP)
-                .build();
-        mBillingClient.launchBillingFlow(this, flowParams);
-    }
+    private void buySubscription(final String productID) {
+        mBillingClient.startConnection(new BillingClientStateListener() {
+            @Override
+            public void onBillingSetupFinished(BillingResult billingResult) {
+                if (billingResult.getResponseCode() == OK && !productID.equals("")) {
+                    List<String> skuList = new ArrayList<>();
+                    skuList.add(productID);
+                    SkuDetailsParams.Builder params = SkuDetailsParams.newBuilder();
+                    params.setSkusList(skuList).setType(BillingClient.SkuType.SUBS);
+                    //Ödeme detaylarını almak için bu bölümü kullanılır
+                    mBillingClient.querySkuDetailsAsync(params.build(), new SkuDetailsResponseListener() {
+                        @Override
+                        public void onSkuDetailsResponse(BillingResult billingResult, List<SkuDetails> skuDetailsList) {
+                            Log.e(TAG, "querySkuDetailsAsync " + billingResult.getResponseCode());
+                            if (billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK && skuDetailsList != null) {
+                                for (SkuDetails skuDetails : skuDetailsList) {
+                                    String sku = skuDetails.getSku();
+                                    String price = skuDetails.getPrice();
 
-    private void buySubscription(String productID) {
-        BillingFlowParams flowParams = BillingFlowParams.newBuilder()
-                .setSku(productID)
-                .setType(BillingClient.SkuType.SUBS)
-                .build();
-        mBillingClient.launchBillingFlow(this, flowParams);
+                                    //Ekrana ödeme işleminin çıkması ve ödemeyi tamamlamak için kullanılır
+                                    BillingFlowParams flowParams = BillingFlowParams.newBuilder()
+                                            .setSkuDetails(skuDetails)
+                                            .build();
+                                    BillingResult responseCode = mBillingClient.launchBillingFlow(this, flowParams);
+                                }
+                            } else
+                                Log.e(TAG, " error: " + billingResult.getDebugMessage());
+                        }
+                    });
+                } else
+                    Log.e(TAG, "onBillingSetupFinished() error code: " + billingResult.getDebugMessage());
+            }
+
+            @Override
+            public void onBillingServiceDisconnected() {
+                Log.w(TAG, "onBillingServiceDisconnected()");
+            }
+        });
     }
 
     @Override
-    public void onPurchasesUpdated(int responseCode, @Nullable final List<Purchase> purchases) {
-        if (responseCode == BillingClient.BillingResponse.OK && purchases != null) {
-            for (final Purchase purchase : purchases) {
-                mBillingClient.consumeAsync(purchase.getPurchaseToken(), new ConsumeResponseListener() {
-                    @Override
-                    public void onConsumeResponse(int responseCode, String purchaseToken) {
-                        if (responseCode == BillingClient.BillingResponse.OK) {
-                            //satın alma başarılı bir şekilde tamamlandığı durumda yapacağınız işlemler burada yer alacak
-                        }
-                    }
-                });
+    public void onPurchasesUpdated(BillingResult billingResult, List<Purchase> purchases) {
+        if (billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK
+                && purchases != null) {
+            for (Purchase purchase : purchases) {
+                //satın alma başarılı bir şekilde tamamlandığı durumda yapacağınız işlemler burada yer alacak
             }
-        } else if (responseCode == BillingClient.BillingResponse.USER_CANCELED) {
-            //Kullanıcı iptal ettiği durumlarda yapacağınız işlemler burada yer alacak.
+        } else if (billingResult.getResponseCode() == BillingClient.BillingResponseCode.USER_CANCELED) {
+            // Kullanıcı iptal ettiği durumlarda yapacağınız işlemler burada yer alacak.
         }
     }
 }
